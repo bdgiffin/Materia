@@ -2,34 +2,51 @@
 #define PLASTIC_H
 
 #include <math.h>
+#include <float.h> // FLT_EPSILON
 #include "Elastic.h"
-#include "matrix_function.h"
+#include "matrix_function.h" // matrix_jacobian()
 
-class Plastic : Elastic {
+class Plastic : public Elastic {
+public:
 
+  // Plastic material parameters
   float yield; // Yield stress
 
-  Plastic(float density, float youngs_modulus, float poisson_ratio, float yield_stress) : Elastic(float density, float youngs_modulus, float poisson_ratio) {
+  // Parameterized constructor
+  Plastic(float density, float youngs_modulus, float poisson_ratio, float yield_stress) : Elastic(density, youngs_modulus, poisson_ratio) {
     yield = yield_stress;
   } // Plastic()
 
-  virtual bool update(float** F, float* state) {
-    // compute the Eulerian Hencky (logarithmic) strain measure: H = 0.5*log(F*F^T)
-    float H11 = F[0][0]*F[0][0]+F[0][1]*F[0][1];
-    float H22 = F[1][0]*F[1][0]+F[1][1]*F[1][1];
-    float H12 = F[0][0]*F[1][0]+F[0][1]*F[1][1];
-    matrix_function(H11,H22,H12,[](float lam) -> float {return 0.5f*logf(lam);});
+  // Return the number of state variables for allocation purposes
+  virtual int numStateVariables(void) { return 2; }
+
+  // Initialize the material state
+#pragma acc routine seq
+  virtual void initialize(float* state) {
+    state[0] = 0.0f;
+    state[1] = 0.0f;
+  } // initialize(float* state)
+
+  // Update the material state using the current deformation gradient F
+#pragma acc routine seq
+  bool update(float (&F)[2][2], float* state) {
+    // compute the Lagrangian Hencky (logarithmic) strain measure: H = 0.5*log(F^T*F)
+    float H11 = F[0][0]*F[0][0]+F[1][0]*F[1][0];
+    float H22 = F[0][1]*F[0][1]+F[1][1]*F[1][1];
+    float H12 = F[0][0]*F[0][1]+F[1][0]*F[1][1];
+    float J1111,J2222,J1212,J2212,J1112,J1122;
+    matrix_jacobian(H11,H22,H12,J1111,J2222,J1212,J2212,J1112,J1122,[](float lam) -> float {return 0.5f*logf(lam);},[](float lam) -> float {return 0.5f/lam;});
 
     // compute the dilatational and deviatoric elastic strains
     float trH = H11+H22;
-    float devH11 = H11-state_vars[n_state_vars*(4*ie+q)  ]-0.5f*trH;
-    float devH12 = H12-state_vars[n_state_vars*(4*ie+q)+1];
+    float devH11 = H11-state[0]-0.5f*trH;
+    float devH12 = H12-state[1];
 
     // compute the effective stress
     float seff = mu2*2.0f*sqrtf(devH11*devH11+devH12*devH12);
 
     // compute plastic strain increment divided by Heff
-    float deps = fmax(0.0f,1.0f-yield/(seff+mu2*1.0e-16));
+    float deps = fmax(0.0f,1.0f-yield/fmax(seff,mu2*FLT_EPSILON));
 
     // compute the current pressure
     float press = kappa*trH;
@@ -38,43 +55,80 @@ class Plastic : Elastic {
     state[0] += devH11*deps;
     state[1] += devH12*deps;
 
-    // compute the Kirchhoff stress tensor
+    // compute the co-rotational stress tensor T = kappa*trH*I + 2*mu*dev[He-Hp]
     float mu2eff = mu2*(1.0f-deps);
-    float tau11 = mu2eff*devH11 + press;
-    float tau22 =-mu2eff*devH11 + press;
-    float tau12 = mu2eff*devH12;
+    float T11 = mu2eff*devH11 + press;
+    float T22 =-mu2eff*devH11 + press;
+    float twoT12 = 2.0f*mu2eff*devH12;
 
-    // compute the Kirchhoff stress tensor
-    // for a Hencky elastic model: tau = 2*mu*H + lam*tr(H)*I
-    //float tau11 = pmod*H11 + lam*H22;
-    //float tau22 = pmod*H22 + lam*H11;
-    //float tau12 = mu2*H12;
+    // transform of the co-rotational stress T into S = J : T
+    float S11 = J1111*T11+J1122*T22+J1112*twoT12;
+    float S22 = J1122*T11+J2222*T22+J2212*twoT12;
+    float S12 = J1112*T11+J2212*T22+J1212*twoT12;
 
-    // transform the Kirchhoff stress into the first P-K stress: P = tau*F^-T
-    // (times the differential volume dV)
-    float dVdetF = dV/(F[0][0]*F[1][1] - F[0][1]*F[1][0]);
-    float P_dV[2][2] = { {(+tau11*F[1][1]-tau12*F[0][1])*dVdetF,
-			  (-tau11*F[1][0]+tau12*F[0][0])*dVdetF},
-			 {(+tau12*F[1][1]-tau22*F[0][1])*dVdetF,
-			  (-tau12*F[1][0]+tau22*F[0][0])*dVdetF} };
-
-    // compute the Kirchhoff stress tensor
-    // for a Hencky elastic model: tau = 2*mu*H + lam*tr(H)*I
-    float tau11 = pmod*H11 + lam*H22;
-    float tau22 = pmod*H22 + lam*H11;
-    float tau12 = mu2*H12;
-
-    // transform the Kirchhoff stress into the first P-K stress: P = tau*F^-T
+    // transform the second P-K stress into the first P-K stress: P = F*S
     // (return as F)
-    float idetF = 1.0/(F[0][0]*F[1][1] - F[0][1]*F[1][0]);
-    F = { {(+tau11*F[1][1]-tau12*F[0][1])*idetF,
-           (-tau11*F[1][0]+tau12*F[0][0])*idetF},
-          {(+tau12*F[1][1]-tau22*F[0][1])*idetF,
-           (-tau12*F[1][0]+tau22*F[0][0])*idetF} };
+    float P[2][2] = { {F[0][0]*S11+F[0][1]*S12, F[0][0]*S12+F[0][1]*S22},
+                      {F[1][0]*S11+F[1][1]*S12, F[1][0]*S12+F[1][1]*S22} };
+    F[0][0] = P[0][0];
+    F[0][1] = P[0][1];
+    F[1][0] = P[1][0];
+    F[1][1] = P[1][1];
 
     return true;
-  } // update(float** F, float* state)
+  } // update(float (&F)[2][2], float* state)
+
+    // Update the material state using the current deformation gradient F
+#pragma acc routine seq
+  bool updatePlastic(float (&F)[2][2], float* state) {
+    // compute the Lagrangian Hencky (logarithmic) strain measure: H = 0.5*log(F^T*F)
+    float H11 = F[0][0]*F[0][0]+F[1][0]*F[1][0];
+    float H22 = F[0][1]*F[0][1]+F[1][1]*F[1][1];
+    float H12 = F[0][0]*F[0][1]+F[1][0]*F[1][1];
+    float J1111,J2222,J1212,J2212,J1112,J1122;
+    matrix_jacobian(H11,H22,H12,J1111,J2222,J1212,J2212,J1112,J1122,[](float lam) -> float {return 0.5f*logf(lam);},[](float lam) -> float {return 0.5f/lam;});
+
+    // compute the dilatational and deviatoric elastic strains
+    float trH = H11+H22;
+    float devH11 = H11-state[0]-0.5f*trH;
+    float devH12 = H12-state[1];
+
+    // compute the effective stress
+    float seff = mu2*2.0f*sqrtf(devH11*devH11+devH12*devH12);
+
+    // compute plastic strain increment divided by Heff
+    float deps = fmax(0.0f,1.0f-yield/fmax(seff,mu2*FLT_EPSILON));
+
+    // compute the current pressure
+    float press = kappa*trH;
+
+    // update the plastic strains
+    state[0] += devH11*deps;
+    state[1] += devH12*deps;
+
+    // compute the co-rotational stress tensor T = kappa*trH*I + 2*mu*dev[He-Hp]
+    float mu2eff = mu2*(1.0f-deps);
+    float T11 = mu2eff*devH11 + press;
+    float T22 =-mu2eff*devH11 + press;
+    float twoT12 = 2.0f*mu2eff*devH12;
+
+    // transform of the co-rotational stress T into S = J : T
+    float S11 = J1111*T11+J1122*T22+J1112*twoT12;
+    float S22 = J1122*T11+J2222*T22+J2212*twoT12;
+    float S12 = J1112*T11+J2212*T22+J1212*twoT12;
+
+    // transform the second P-K stress into the first P-K stress: P = F*S
+    // (return as F)
+    float P[2][2] = { {F[0][0]*S11+F[0][1]*S12, F[0][0]*S12+F[0][1]*S22},
+                      {F[1][0]*S11+F[1][1]*S12, F[1][0]*S12+F[1][1]*S22} };
+    F[0][0] = P[0][0];
+    F[0][1] = P[0][1];
+    F[1][0] = P[1][0];
+    F[1][1] = P[1][1];
+
+    return true;
+  } // update(float (&F)[2][2], float* state)
   
-} // Plastic()
+}; // Plastic()
 
 #endif // PLASTIC_H

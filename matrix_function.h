@@ -2,6 +2,7 @@
 #define MATRIX_FUNCTION_H
 
 #include <math.h>
+#include <float.h>
 
 // evaluate the matrix-valued function of the incoming 2x2 symmetric matrix,
 // and return via the incoming components
@@ -40,11 +41,8 @@ inline void matrix_function(float& a11, float& a22, float& a12, Functor f) {
 // evaluate the tensor-valued jacobian of the incoming 2x2 symmetric matrix
 // and return the matrix-valued function via the incoming components
 #pragma acc routine seq
-template<typename Functor>
-inline void matrix_jacobian(float& a11, float& a22, float& a12,
-			    float& j11, float& j22, float& j33,
-			    float& j23, float& j13, float& j12,
-			    Functor f, Functor dfdx) {
+template<typename Functor,typename Derivative>
+inline void matrix_jacobian(float& a11, float& a22, float& a12, float& j11, float& j22, float& j33, float& j23, float& j13, float& j12, Functor f, Derivative dfdx) {
   // compute the difference in the eigenvalues [5 flops, 1 sqrt]
   float gap = sqrtf((a11-a22)*(a11-a22)+4.0f*a12*a12);
 
@@ -58,7 +56,7 @@ inline void matrix_jacobian(float& a11, float& a22, float& a12,
   float f1 = f(lam1);
 
   // compute the stabilized finite difference of f() [2 flops, 1 f()]
-  float lam2 = lam1+gap
+  float lam2 = lam1+gap;
   float diff = f(lam2)-f1;
 
   // compute projection matrix P2 = (A - lam1*I)*igap [5 flops]
