@@ -69,11 +69,11 @@ inline void matrix_jacobian(float& a11, float& a22, float& a12, float& j11, floa
   float j1 = ((j0+dfdx(lam2))*gap-2.0f*diff)*igap;
   float j2 = (diff-j0*gap)*igap;
 
-  // compute the jacobian entries [20 flops]
+  // compute the jacobian entries [24 flops]
   j11 = j0+a11*(j1*a11+2.0f*j2);
-  j22 = j0+a22*(j1*a22+2.0f*j2);
+  j22 = j0+a22*(j1*a22+2.0f*j2); 
+  j33 = 0.5*(j0+j2*(a11+a22)+j1*(a11*a22+a12*a12));
   j12 = j1*a12*a12;
-  j33 = j0+j12+j2*(a11+a22);
   j13 = a12*(j1*a11+j2);
   j23 = a12*(j1*a22+j2);
 
@@ -83,7 +83,7 @@ inline void matrix_jacobian(float& a11, float& a22, float& a12, float& j11, floa
   a12 *= diff;
 
   // operation totals:
-  // 47 flops
+  // 51 flops
   // 1 sqrtf()
   // 1 fmax()
   // 1 div

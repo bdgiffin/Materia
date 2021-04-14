@@ -61,10 +61,10 @@ public:
     float T22 =-mu2eff*devH11 + press;
     float twoT12 = 2.0f*mu2eff*devH12;
 
-    // transform of the co-rotational stress T into S = J : T
-    float S11 = J1111*T11+J1122*T22+J1112*twoT12;
-    float S22 = J1122*T11+J2222*T22+J2212*twoT12;
-    float S12 = J1112*T11+J2212*T22+J1212*twoT12;
+    // transform of the co-rotational stress T into S = J : 2 T
+    float S11 = 2.0f*(J1111*T11+J1122*T22+J1112*twoT12);
+    float S22 = 2.0f*(J1122*T11+J2222*T22+J2212*twoT12);
+    float S12 = 2.0f*(J1112*T11+J2212*T22+J1212*twoT12);
 
     // transform the second P-K stress into the first P-K stress: P = F*S
     // (return as F)
